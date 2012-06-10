@@ -61,12 +61,23 @@ int main(int argc, char **argv)
   * so at least you still have your code changes written to the SD-card! *
  \************************************************************************/
 
+ for(int i=0; i<10;i++) {
+    printf("memory address=0x%x: 0x%x\n", gpio+i, *(gpio+i));
+ }
+
+
+  printf("setting IO regs\n");
+
   // Set GPIO pins 7-11 to output
   for (g=7; g<=11; g++)
   {
     INP_GPIO(g); // must use INP_GPIO before we can use OUT_GPIO
     OUT_GPIO(g);
   }
+
+ for(int i=0; i<10;i++) {
+    printf("memory address=0x%x: 0x%x\n", gpio+i, *(gpio+i));
+ }
 
   for (rep=0; rep<10; rep++)
   {
