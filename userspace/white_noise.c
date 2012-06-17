@@ -23,6 +23,7 @@
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <inttypes.h>
 
 #include <unistd.h>
 
@@ -50,6 +51,86 @@ volatile unsigned *clk;
 #define GPIO_CLR *(gpio+10) // clears bits which are 1 ignores bits which are 0
 
 void setup_io();
+
+void sendFrame(int subframe, char preamble) {
+
+    static int lastBit;
+
+    // encode subframe into 2x32bit BMC
+    uint64_t w;
+    
+    if (preamble == 'X' && lastBit)
+       w = 0b00011101;
+    else if (preamble == 'X' && !lastBit)
+       w = 0b11100010;
+    else if (preamble == 'Y' && lastBit)
+       w = 0b00011011;
+    else if (preamble == 'Y' && !lastBit)
+       w = 0b11100100;
+    else if (preamble == 'Z' && lastBit)
+       w = 0b00010111;
+    else if (preamble == 'Z' && !lastBit)
+       w = 0b11101000;
+
+
+    // encode bmc
+    int t;
+    for (t=4; t<32; t++) {
+      w |= (lastBit?0:1)<<(t*2);
+
+      if (subframe & (1<<t))
+        w |= (lastBit?1:0)<<(t*2+1);
+      else
+        w |= (lastBit?0:1)<<(t*2+1);
+
+      lastBit = w & (1<<(t*2+1));
+    }
+
+    int part1 = (int)(w & 0x00000000FFFFFFFF);
+    int part2 = (int)((w>>32) & 0x00000000FFFFFFFF);
+
+    while (!((*i2s) & (1<<19)));
+    *(i2s+1) = part1;
+
+    while (!((*i2s) & (1<<19)));
+    *(i2s+1) = part2;
+
+
+}
+
+int nextChannelStatusBit() {
+ static position = 0;
+ position = position % (32*24);
+ int c = 0;
+ c |= 1<<2; // copy permit
+ 
+ if (position++ >= 30)
+   return 0;
+ else
+   return (c & 1<<position)?1:0;
+}
+
+int evenParity(int word) {
+ int t;
+ int count=0;
+ for(t=4;t<31;t++)
+   if (word & 1<<t)
+     count++;
+ 
+ return (count%2==0)?0:1;
+}
+
+int makeSubFrame() {
+
+  uint16_t pcm = 0xAAAA;
+  
+  int ret = pcm<<8;
+  ret |= 1<<28; // validity bit
+  ret |= nextChannelStatusBit()<<30;
+  ret |= evenParity(ret)<<31;
+
+  return ret;
+}
 
 int main(int argc, char **argv)
 { int g,rep;
@@ -140,7 +221,26 @@ int main(int argc, char **argv)
   int count=0;
   int e=0;
   printf("going into loop\n");
+
   while (1) {
+    // send one audio block
+
+    int f;
+    for (f=0; f<192; f++) {
+      // send one frame
+      
+        // channels are identical
+        int sf = makeSubFrame();
+        
+        // send channel A
+        if (f==0)
+          sendFrame(sf,'Z');
+        else
+          sendFrame(sf,'X');
+        
+        // send channel B
+        sendFrame(sf,'Y');
+    }
   
     while ((*i2s) & (1<<19)) {
       // FIFO accepts data
