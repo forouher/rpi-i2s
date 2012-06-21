@@ -1,13 +1,6 @@
 //
-//  How to access GPIO registers from C-code on the Raspberry-Pi
-//  Example program
-//  15-January-2012
-//  Dom and Gert
-//  source: http://elinux.org/RPi_Low-level_peripherals
-
-// output white noise on I2S
-
-// Access from ARM Running Linux
+// output A0A0A0 on PCM_DOUT with about 6Mhz
+// based on source from: http://elinux.org/RPi_Low-level_peripherals
 
 #define BCM2708_PERI_BASE        0x20000000
 #define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000) /* GPIO controller */
@@ -52,90 +45,6 @@ volatile unsigned *clk;
 
 void setup_io();
 
-void sendFrame(int subframe, char preamble) {
-
-    static int lastBit;
-
-    // encode subframe into 2x32bit BMC
-    uint64_t w;
-    
-    if (preamble == 'X' && lastBit)
-       w = 0b00011101;
-    else if (preamble == 'X' && !lastBit)
-       w = 0b11100010;
-    else if (preamble == 'Y' && lastBit)
-       w = 0b00011011;
-    else if (preamble == 'Y' && !lastBit)
-       w = 0b11100100;
-    else if (preamble == 'Z' && lastBit)
-       w = 0b00010111;
-    else if (preamble == 'Z' && !lastBit)
-       w = 0b11101000;
-
-
-    // encode bmc
-    int t;
-    for (t=4; t<32; t++) {
-      w |= (lastBit?0:1)<<(t*2);
-
-      if (subframe & (1<<t))
-        w |= (lastBit?1:0)<<(t*2+1);
-      else
-        w |= (lastBit?0:1)<<(t*2+1);
-
-      lastBit = w & (1<<(t*2+1));
-    }
-
-    int part1 = (int)(w & 0x00000000FFFFFFFF);
-    int part2 = (int)((w>>32) & 0x00000000FFFFFFFF);
-
-    while (!((*i2s) & (1<<19)));
-    *(i2s+1) = part1;
-
-    while (!((*i2s) & (1<<19)));
-    *(i2s+1) = part2;
-
-
-}
-
-int nextChannelStatusBit() {
- static position = 0;
- position = position % (32*24);
- int c = 0;
- c |= 1<<2; // copy permit
- 
- // TODO bits 20-23 define the channel!
- // http://www.minidisc.org/spdif_c_channel.html
- // left it "unspecified" for now...
- 
- if (position++ >= 30)
-   return 0;
- else
-   return (c & 1<<position)?1:0;
-}
-
-int evenParity(int word) {
- int t;
- int count=0;
- for(t=4;t<31;t++)
-   if (word & 1<<t)
-     count++;
- 
- return (count%2==0)?0:1;
-}
-
-int makeSubFrame() {
-
-  uint16_t pcm = 0xAAAA;
-  
-  int ret = pcm<<8;
-  ret |= 1<<28; // validity bit
-  ret |= nextChannelStatusBit()<<30;
-  ret |= evenParity(ret)<<31;
-
-  return ret;
-}
-
 int main(int argc, char **argv)
 { int g,rep;
 
@@ -172,10 +81,6 @@ int main(int argc, char **argv)
  printf("Enabling I2S clock\n");
  *(clk+0x26) = 0x5A000011;
 
-// for(i=0x26; i<=0x27;i++) {
-//   printf("Clock memory address=0x%08x: 0x%08x\n", clk+i, *(clk+i));
-// }
-
   // disable I2S so we can modify the regs
   printf("Disable I2S\n");
   *(i2s+0) &= ~(1<<24);
@@ -183,7 +88,6 @@ int main(int argc, char **argv)
   *(i2s+0) = 0;
   usleep(100);
 
-  // XXX: seems not to be working. FIFO still full, after this.
   printf("Clearing FIFOs\n");
   *(i2s+0) |= 1<<3 | 1<<4 | 11<5; // clear TX FIFO
   usleep(10);
@@ -193,8 +97,7 @@ int main(int argc, char **argv)
   printf("Setting TX channel settings\n");
   *(i2s+4) = 1<<31 | 1<<30 | 8<<16;
   // --> frame width 31+1 bit
-  *(i2s+2) = 31<<10 | 1<<23;
-//  *(i2s+2) = 31<<10;
+  *(i2s+2) = 31<<10;
 
   // --> disable STBY 
   printf("disabling standby\n");
@@ -232,54 +135,19 @@ int main(int argc, char **argv)
 
   // fill FIFO in while loop
   int count=0;
-  int e=0;
   printf("going into loop\n");
 
   while (1) {
-    // send one audio block
-/*
-    int f;
-    for (f=0; f<192; f++) {
-      // send one frame
-      
-        // channels are identical
-        int sf = makeSubFrame();
-        
-        // send channel A
-        if (f==0)
-          sendFrame(sf,'Z');
-        else
-          sendFrame(sf,'X');
-        
-        // send channel B
-        sendFrame(sf,'Y');
-    }
-*/
+
     while ((*i2s) & (1<<19)) {
       // FIFO accepts data
       *(i2s+1) = 0xA0A0A0A0;
       
       if ((++count % 1000000)==0)
-         printf("Filling FIFO, empty=%i count=%i\n", e, count);
+         printf("Filling FIFO, count=%i\n", count);
          
     }
     
-    e++;
-    
-    // Toogle SYNC Bit
-    //( XXX: do I have to deactivate I2S to do that? datasheet is unclear)
-/*    *(i2s+0) &= ~(0x01);
-    *(i2s+0) ^= 1<<24;
-    *(i2s+0) |= 0x01;
-*/
-//    sleep(1);
-
-/*    
-    printf("Memory dump\n");
-    for(i=0; i<9;i++) {
-       printf("I2S memory address=0x%08x: 0x%08x\n", i2s+i, *(i2s+i));
-    }
-*/
   }
 
   return 0;
